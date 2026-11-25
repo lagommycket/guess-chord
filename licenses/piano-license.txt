@@ -1,0 +1,12 @@
+Piano sample credits:
+
+Salamander Grand Piano V3
+Original recordings by Alexander Holm
+SFZ mapping by kinwie
+Source: https://github.com/sfzinstruments/SalamanderGrandPiano
+License: Creative Commons Attribution 3.0 Unported (CC BY 3.0)
+License text: https://creativecommons.org/licenses/by/3.0/
+
+Selected native-pitch samples are included in audio/piano/ and converted from
+FLAC to MP3 for this application. The original recording credit and license
+apply. See the source repository and CC BY 3.0 terms before redistribution.

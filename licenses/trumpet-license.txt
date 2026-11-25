@@ -1,0 +1,9 @@
+Trumpet sample credits:
+
+VSCO 2 Community Edition, sustained trumpet samples
+By Versilian Studios
+Source: https://github.com/sgossner/VSCO-2-CE/tree/master/Brass/Trumpet
+License: Creative Commons CC0 1.0 Universal
+
+Selected samples are included in audio/trumpet/ and converted from WAV to MP3
+for this application. See the source distribution and license for details.
