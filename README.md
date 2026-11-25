@@ -2,6 +2,8 @@
 
 A fully static web app for musical ear training. Practice single notes, scales, and triads using piano or trumpet samples. The app does not send usage data and requires no backend or database.
 
+The header displays the app version. Update the `APP_VERSION` constant in `js/app.js` whenever the app changes; use the patch segment for routine updates and keep the README in step with the displayed value.
+
 ## Projektstruktur
 
 ```text
@@ -60,6 +62,10 @@ B4.mp3
 The supported pitch range is C3 through C6. The mapped source pitches listed above are included. An exact sample is preferred; otherwise the nearest mapped sample is used, with transposition limited to three semitones. To extend coverage, add a legal source pitch to `SAMPLE_MAPS` and put its MP3 in the matching instrument folder. The sample test view reports actual coverage and missing files.
 
 The sample test only loads audio after an explicit user action. For each note, it shows the status, expected path, and (when transposed) the source sample and semitone difference.
+
+### Safari and iOS
+
+On iPhone and iPad, tap **Start training** or **Play** to unlock the shared Web Audio context. The app does not autoplay the first question on iOS; tap **Play** when ready. If Safari suspends audio after the page is backgrounded, the next Play action resumes it. The sample screen's **Test audio system** button checks context creation, sample fetch/decode, and playback using the local piano C3 sample.
 
 ## Settings and data
 

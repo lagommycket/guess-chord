@@ -1,12 +1,13 @@
 import { getAllTonesForDifficulty, formatNoteName, findSampleSource, getRequiredSampleFilenames } from './music-data.js';
 import { createQuestion, getNextQuestion, checkAnswer } from './game-engine.js';
-import { initializeAudio, setMasterVolume, playSingleNote, playScale, playChord, playArpeggio, stopAllSounds, checkRequiredSamples, getAudioDebugState } from './audio-engine.js';
+import { ensureAudioReady, isIOSWebKit, loadSample, setMasterVolume, playSingleNote, playScale, playChord, playArpeggio, stopAllSounds, checkRequiredSamples, getAudioDebugState } from './audio-engine.js?v=1.0.3';
 import { loadData, saveData, defaultStatistics, createExport, parseImport, STORAGE_VERSION } from './storage.js';
 import { recordAnswer, formatAccuracy } from './statistics.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const viewIds = ['home-view', 'game-view', 'samples-view', 'stats-view', 'error-view'];
+const APP_VERSION = '1.0.4';
 const modeLabels = { note: 'Single note', scale: 'Scale', chord: 'Chord' };
 const instrumentLabels = { piano: 'Piano', trumpet: 'Trumpet' };
 const difficultyLabels = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
@@ -104,15 +105,56 @@ function updateStatsView() {
 
 function updateDebug() {
   if (!debugEnabled) return;
-  const panel = $('#debug-panel');
-  panel.hidden = false;
   const summary = {
-    question: currentQuestion, settings: state.settings, audio: getAudioDebugState(),
+    appVersion: APP_VERSION, question: currentQuestion, settings: state.settings, audio: getAudioDebugState(),
+    browserUserAgent: navigator.userAgent,
+    audioContextSupported: Boolean(window.AudioContext || window.webkitAudioContext),
+    webkitAudioContextUsed: getAudioDebugState().usedWebkitAudioContext,
+    iosAudioUnlocked: getAudioDebugState().iosAudioUnlocked,
+    masterGainConnected: getAudioDebugState().masterGainConnected,
     requiredSamples: currentQuestion ? getRequiredSampleFilenames(currentQuestion) : [],
     playbackToken: questionToken, lastAudioError: getAudioDebugState().lastAudioError,
     lastError, localStorageVersion: STORAGE_VERSION
   };
   $('#debug-output').textContent = JSON.stringify(summary, null, 2);
+}
+
+function showAudioFailure(error, message = 'The sound could not be played. Tap Play to try again.') {
+  lastError = error.message;
+  $('#audio-alert-message').textContent = message;
+  $('#audio-alert').hidden = false;
+  $('#audio-status').textContent = 'Could not play audio.';
+  announce(message, true);
+  updateDebug();
+}
+
+async function runAudioSystemTest(output) {
+  const steps = [];
+  let currentStep = 'AudioContext unlock';
+  output.textContent = 'Starting audio test …';
+  try {
+    const context = await ensureAudioReady();
+    steps.push('AudioContext created ✓', `AudioContext: ${context.state} ✓`);
+    output.textContent = steps.join('\n');
+    currentStep = 'Loading and decoding piano C3.mp3';
+    await loadSample('piano', 'C3.mp3');
+    steps.push('C3.mp3 loaded ✓', 'MP3 decoded ✓');
+    output.textContent = steps.join('\n');
+    currentStep = 'Playing piano C3.mp3';
+    const playback = playSingleNote('piano', 48);
+    steps.push('Playback started ✓');
+    output.textContent = steps.join('\n');
+    await playback;
+    steps.push('Playback finished ✓', 'No sound? Check media volume, audio output/Bluetooth, then tap Play again.');
+    output.textContent = steps.join('\n');
+    updateDebug();
+  } catch (error) {
+    lastError = error.message;
+    steps.push(`${currentStep} failed: ${error.message}`);
+    output.textContent = steps.join('\n');
+    announce('The audio system test failed. See its status for details.', true);
+    updateDebug();
+  }
 }
 
 function setBusy(value, message = '') {
@@ -126,13 +168,15 @@ function playbackOptions() {
   return { humanize: state.settings.humanize, volumeVariation: state.settings.volumeVariation };
 }
 
+function shouldAutoplayQuestion() { return state.settings.autoPlay && !isIOSWebKit(); }
+
 async function playCurrentQuestion() {
   if (!currentQuestion || busy) return;
   const token = questionToken;
   setBusy(true, 'Preparing playback …');
   $('#audio-alert').hidden = true;
   try {
-    await initializeAudio();
+    await ensureAudioReady();
     setBusy(true, 'Playing audio …');
     if (currentQuestion.mode === 'note') await playSingleNote(currentQuestion.instrument, currentQuestion.playbackNotes[0]);
     else if (currentQuestion.mode === 'scale') await playScale(currentQuestion.instrument, currentQuestion.playbackNotes, playbackOptions());
@@ -141,19 +185,14 @@ async function playCurrentQuestion() {
     if (token === questionToken) {
       setBusy(false);
       $('#play-question').setAttribute('aria-label', 'Play again');
-      $('#play-caption').textContent = 'Play again';
+      updateDebug();
     }
   } catch (error) {
     if (token !== questionToken) return;
-    lastError = error.message;
     audioReady = false;
-    $('#audio-alert-message').textContent = `${error.message} Check the sample file or test available samples.`;
-    $('#audio-alert').hidden = false;
-    $('#audio-status').textContent = 'Could not load audio.';
     setBusy(false);
     $('#answer-options').querySelectorAll('button').forEach((button) => { button.disabled = true; });
-    announce(`${instrumentLabels[currentQuestion.instrument]}: ${error.message}`, true);
-    updateDebug();
+    showAudioFailure(error);
   }
 }
 
@@ -187,7 +226,6 @@ async function prepareQuestion(question, shouldAutoplay = false) {
   $('#feedback').hidden = true;
   $('#audio-alert').hidden = true;
   $('#next-question').disabled = true;
-  $('#play-caption').textContent = question.mode === 'note' ? 'Listen to the note' : question.mode === 'scale' ? 'Listen to the scale' : question.playbackType === 'arpeggio' ? 'Listen to the arpeggio' : 'Listen to the chord';
   $('#play-question').setAttribute('aria-label', 'Play question');
   renderAnswers(question);
   $('#play-question').disabled = true;
@@ -214,7 +252,8 @@ async function prepareQuestion(question, shouldAutoplay = false) {
     }
     audioReady = true;
     setBusy(false);
-    if (shouldAutoplay) await playCurrentQuestion();
+    updateDebug();
+    if (shouldAutoplay && !isIOSWebKit()) await playCurrentQuestion();
     if (thisToken === questionToken) $('#play-question').focus();
   } catch (error) {
     if (thisToken !== questionToken) return;
@@ -234,10 +273,10 @@ async function startTraining() {
   persist();
   gameCorrect = 0; gameAnswered = 0;
   try {
-    await initializeAudio();
+    await ensureAudioReady();
     showView('game-view');
     focusViewHeading('#game-title');
-    await prepareQuestion(createQuestion(state.settings), state.settings.autoPlay);
+    await prepareQuestion(createQuestion(state.settings), shouldAutoplayQuestion());
   } catch (error) { showFatalError(error); }
 }
 
@@ -288,8 +327,9 @@ function answerQuestion(option, button) {
 async function nextQuestion() {
   if (!answered || busy) return;
   try {
+    await ensureAudioReady();
     const next = getNextQuestion(state.settings, currentQuestion);
-    await prepareQuestion(next, state.settings.autoPlay);
+    await prepareQuestion(next, shouldAutoplayQuestion());
   } catch (error) { showFatalError(error); }
 }
 
@@ -331,7 +371,7 @@ function renderSampleList() {
     const play = document.createElement('button'); play.type = 'button'; play.className = 'secondary-button compact'; play.textContent = 'Play'; play.disabled = !result || result.status === 'missing' || result.status === 'loading';
     play.addEventListener('click', async () => {
       play.disabled = true;
-      try { await initializeAudio(); await playSingleNote(instrument, tone.midiNumber); }
+      try { await ensureAudioReady(); await playSingleNote(instrument, tone.midiNumber); }
       catch (error) { announce(error.message, true); }
       finally { play.disabled = false; }
     });
@@ -354,17 +394,23 @@ async function inspectTone(instrument, tone) {
 async function checkAllSamples() {
   const button = $('#check-all-samples');
   button.disabled = true;
-  const instrument = $('#sample-instrument').value;
-  const tones = getAllTonesForDifficulty($('#sample-difficulty').value);
-  let checked = 0;
-  $('#sample-summary').textContent = `Checking 0 of ${tones.length} notes …`;
-  for (const tone of tones) {
-    await inspectTone(instrument, tone);
-    checked += 1;
-    $('#sample-summary').textContent = `Checking ${checked} of ${tones.length} notes …`;
-  }
-  renderSampleList();
-  button.disabled = false;
+  try {
+    await ensureAudioReady();
+    const instrument = $('#sample-instrument').value;
+    const tones = getAllTonesForDifficulty($('#sample-difficulty').value);
+    let checked = 0;
+    $('#sample-summary').textContent = `Checking 0 of ${tones.length} notes …`;
+    for (const tone of tones) {
+      await inspectTone(instrument, tone);
+      checked += 1;
+      $('#sample-summary').textContent = `Checking ${checked} of ${tones.length} notes …`;
+    }
+    renderSampleList();
+  } catch (error) {
+    lastError = error.message;
+    $('#sample-summary').textContent = `Audio test failed: ${error.message}`;
+    updateDebug();
+  } finally { button.disabled = false; }
 }
 
 function applySettingsFromForm(target) {
@@ -429,7 +475,7 @@ $('#settings-dialog').addEventListener('cancel', (event) => {
 $('#settings-dialog').addEventListener('close', async () => {
   closeSampleCredits();
   if (!skipSettingsCloseUpdate && settingsChangedDuringDialog && currentQuestion && $('#game-view').classList.contains('active')) {
-    try { await prepareQuestion(createQuestion(state.settings), state.settings.autoPlay); }
+    try { await ensureAudioReady(); await prepareQuestion(createQuestion(state.settings), shouldAutoplayQuestion()); }
     catch (error) { showFatalError(error); }
   }
   skipSettingsCloseUpdate = false;
@@ -456,9 +502,11 @@ $('#sample-credits').addEventListener('keydown', (event) => {
 $('#play-question').addEventListener('click', playCurrentQuestion);
 $('#retry-audio').addEventListener('click', async () => {
   if (!currentQuestion || busy) return;
-  setBusy(true, 'Retrying …');
-  const current = currentQuestion;
-  await prepareQuestion(current, true);
+  try {
+    await ensureAudioReady();
+    setBusy(true, 'Retrying …');
+    await prepareQuestion(currentQuestion, shouldAutoplayQuestion());
+  } catch (error) { showAudioFailure(error); }
 });
 $('#go-samples-from-error').addEventListener('click', goSamples);
 $('#next-question').addEventListener('click', nextQuestion);
@@ -471,6 +519,9 @@ $('#sample-instrument').addEventListener('change', () => { sampleResults.clear()
 $('#sample-difficulty').addEventListener('change', renderSampleList);
 $('#sample-filter').addEventListener('change', renderSampleList);
 $('#check-all-samples').addEventListener('click', checkAllSamples);
+$('#test-audio-system').addEventListener('click', () => runAudioSystemTest($('#audio-system-status')));
+$('#debug-test-audio').addEventListener('click', () => runAudioSystemTest($('#debug-test-status')));
+$('#hide-debug').addEventListener('click', () => { $('#debug-panel').hidden = true; });
 $('#nav-stats').addEventListener('click', showStats);
 $('#stats-back').addEventListener('click', goHome);
 $('#export-stats').addEventListener('click', exportStatistics);
@@ -482,6 +533,15 @@ $('#error-home').addEventListener('click', () => showView('home-view'));
 $('#copy-debug').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('#debug-output').textContent); announce('Debug information copied.'); }
   catch { announce('Could not copy. Select the debug text manually.', true); }
+});
+
+window.addEventListener('audio-interrupted', () => {
+  if (!currentQuestion || !audioReady || !busy || !$('#game-view').classList.contains('active')) return;
+  questionToken += 1;
+  setBusy(false);
+  $('#audio-status').textContent = 'Audio paused. Tap Play to continue.';
+  announce('Audio paused. Tap Play to continue.', true);
+  updateDebug();
 });
 
 document.addEventListener('keydown', (event) => {
@@ -511,6 +571,8 @@ document.addEventListener('keydown', (event) => {
 }, true);
 
 updateHomeControls();
+$('#app-version').textContent = `v${APP_VERSION}`;
+$('#app-version').setAttribute('aria-label', `Version ${APP_VERSION}`);
 state.statistics.lastUsed = new Date().toISOString();
 persist();
 $('#score-value').textContent = '0';
@@ -518,4 +580,7 @@ $('#rate-value').textContent = formatAccuracy(state.statistics);
 $('#streak-value').textContent = String(state.statistics.currentStreak);
 $('#best-streak-value').textContent = String(state.statistics.bestStreak);
 if (loaded.warning) announce(loaded.warning, true);
-if (debugEnabled) updateDebug();
+if (debugEnabled) {
+  $('#debug-panel').hidden = false;
+  updateDebug();
+}

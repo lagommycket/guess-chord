@@ -2,40 +2,117 @@ import { getSampleSources, getToneByMidi } from './music-data.js';
 
 const INSTRUMENT_LABELS = { piano: 'Piano', trumpet: 'Trumpet' };
 const SAMPLE_ROOTS = { piano: './audio/piano/', trumpet: './audio/trumpet/' };
-const bufferCache = new Map();
-const pendingLoads = new Map();
-const activeSources = new Set();
+const audioBufferCache = new Map();
+const loadingPromises = new Map();
+const activeAudioBufferSourceNodes = new Set();
 const requestedMappingDebug = [];
 let audioContext = null;
+let audioReadyPromise = null;
 let masterGain = null;
 let masterVolume = 0.75;
 let playbackToken = 0;
 let lastAudioError = null;
+let iosAudioUnlocked = false;
+let audioNeedsResume = false;
+let usedWebkitAudioContext = false;
+let masterGainConnected = false;
+let lastRequestedSampleURL = null;
+let lastSuccessfullyDecodedSample = null;
+let lastPlaybackStartTime = null;
+let lastSampleFailure = null;
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && audioContext) interruptAudio();
+  else if (audioContext && audioContext.state !== 'running') audioNeedsResume = true;
+});
+
+window.addEventListener('pagehide', () => {
+  if (!audioContext || audioContext.state === 'closed') return;
+  interruptAudio();
+});
+
+function interruptAudio() {
+  audioNeedsResume = true;
+  iosAudioUnlocked = false;
+  stopAllSounds();
+  window.dispatchEvent(new Event('audio-interrupted'));
+}
+
+function unlockIOSAudio(context) {
+  if (iosAudioUnlocked) return;
+  const buffer = context.createBuffer(1, 1, 22050);
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+  source.onended = () => source.disconnect();
+  source.start(0);
+  iosAudioUnlocked = true;
+}
 
 function samplePath(instrument, filename) {
   if (!SAMPLE_ROOTS[instrument]) throw new Error(`Unknown instrument folder: ${instrument}`);
   return `${SAMPLE_ROOTS[instrument]}${filename}`;
 }
 
-export async function initializeAudio() {
+export function isIOSWebKit() {
+  const userAgent = navigator.userAgent ?? '';
+  return /iPad|iPhone|iPod/.test(userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+export async function ensureAudioReady() {
+  if (audioReadyPromise) return audioReadyPromise;
+  audioReadyPromise = createAudioReadyContext();
+  try { return await audioReadyPromise; }
+  finally { audioReadyPromise = null; }
+}
+
+async function createAudioReadyContext() {
+  let resumePromise = null;
+  if (navigator.audioSession) {
+    try { navigator.audioSession.type = 'playback'; }
+    catch (error) { console.info('[Audio] Playback session unavailable:', error); }
+  }
+  if (audioContext?.state === 'closed') {
+    audioContext = null;
+    masterGain = null;
+    masterGainConnected = false;
+    iosAudioUnlocked = false;
+  }
   if (!audioContext) {
-    const Context = window.AudioContext || window.webkitAudioContext;
-    if (!Context) throw new Error('This browser does not support the Web Audio API.');
-    audioContext = new Context();
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error('This browser does not support the Web Audio API.');
+    usedWebkitAudioContext = !window.AudioContext && Boolean(window.webkitAudioContext);
+    audioContext = new AudioContextClass();
     masterGain = audioContext.createGain();
     masterGain.gain.value = masterVolume;
     masterGain.connect(audioContext.destination);
+    masterGainConnected = true;
+    const context = audioContext;
+    context.addEventListener('statechange', () => {
+      if (context === audioContext && context.state !== 'running') interruptAudio();
+    });
   }
-  await resumeAudio();
+  if (audioContext.state !== 'running' && audioContext.state !== 'closed') {
+    audioNeedsResume = true;
+    try { resumePromise = audioContext.resume(); }
+    catch (error) { lastAudioError = error.message; throw new Error('Audio is suspended. Tap Play to resume audio.'); }
+  }
+  try { unlockIOSAudio(audioContext); }
+  catch (error) { lastAudioError = error.message; throw new Error('Could not unlock audio. Tap Play and try again.'); }
+  if (resumePromise) {
+    try { await resumePromise; }
+    catch (error) { lastAudioError = error.message; throw new Error('Audio is suspended. Tap Play to resume audio.'); }
+  }
+  if (audioContext.state !== 'running') {
+    audioNeedsResume = true;
+    throw new Error(`Audio is not running (${audioContext.state}). Tap Play to resume audio.`);
+  }
+  audioNeedsResume = false;
   return audioContext;
 }
 
-export async function resumeAudio() {
-  if (!audioContext) return initializeAudio();
-  if (audioContext.state === 'suspended') await audioContext.resume();
-  if (audioContext.state !== 'running') throw new Error('Audio playback is blocked. Please try pressing Play again.');
-  return audioContext;
-}
+export const initializeAudio = ensureAudioReady;
+export const resumeAudio = ensureAudioReady;
 
 export function setMasterVolume(value) {
   masterVolume = Math.max(0, Math.min(1, Number(value) || 0));
@@ -44,33 +121,51 @@ export function setMasterVolume(value) {
 
 export async function loadSample(instrument, filename) {
   const path = samplePath(instrument, filename);
+  lastRequestedSampleURL = path;
   const cacheKey = `${instrument}:${filename}`;
-  if (bufferCache.has(cacheKey)) return bufferCache.get(cacheKey);
-  if (pendingLoads.has(cacheKey)) return pendingLoads.get(cacheKey);
+  if (audioBufferCache.has(cacheKey)) return audioBufferCache.get(cacheKey);
+  if (loadingPromises.has(cacheKey)) return loadingPromises.get(cacheKey);
+  if (!audioContext || !masterGainConnected) throw new Error('Tap Start or Play to unlock audio before loading samples.');
   const promise = (async () => {
-    await initializeAudio();
     let response;
     try { response = await fetch(path); }
     catch (error) { throw new Error(`Network error loading ${path}: ${error.message}`); }
     if (!response.ok) throw new Error(`Audio file is missing (${response.status}): ${path}`);
     const data = await response.arrayBuffer();
     let decoded;
-    try { decoded = await audioContext.decodeAudioData(data); }
+    try { decoded = await decodeAudioData(audioContext, data); }
     catch (error) { throw new Error(`Unsupported or invalid audio format: ${path} (${error.message})`); }
-    bufferCache.set(cacheKey, decoded);
+    audioBufferCache.set(cacheKey, decoded);
+    lastSuccessfullyDecodedSample = path;
     return decoded;
   })();
-  pendingLoads.set(cacheKey, promise);
+  loadingPromises.set(cacheKey, promise);
   try { return await promise; }
   catch (error) { lastAudioError = error.message; throw error; }
-  finally { pendingLoads.delete(cacheKey); }
+  finally { loadingPromises.delete(cacheKey); }
+}
+
+function decodeAudioData(context, data) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const succeed = (buffer) => { if (!settled) { settled = true; resolve(buffer); } };
+    const fail = (error) => { if (!settled) { settled = true; reject(error); } };
+    try {
+      const result = context.decodeAudioData(data.slice(0), succeed, fail);
+      if (result && typeof result.then === 'function') result.then(succeed, fail);
+    } catch (error) { fail(error); }
+  });
 }
 
 async function resolveSample(instrument, requestedMidi) {
   const requestedTone = getToneByMidi(requestedMidi);
   if (!requestedTone) throw new Error(`Requested note ${requestedMidi} is outside C3-C6.`);
   const candidates = getSampleSources(instrument, requestedMidi);
-  if (!candidates.length) throw new Error(`No configured source sample within three semitones of ${requestedTone.internationalName} (${INSTRUMENT_LABELS[instrument] ?? instrument}).`);
+  if (!candidates.length) {
+    const error = new Error(`No configured source sample within three semitones of ${requestedTone.internationalName} (${INSTRUMENT_LABELS[instrument] ?? instrument}).`);
+    lastSampleFailure = { instrument, requestedNote: requestedTone.internationalName, sourceSample: null, semitoneDifference: null, path: null, message: error.message };
+    throw error;
+  }
   let lastError;
   const attemptedPaths = [];
   let lastMapping = null;
@@ -83,8 +178,13 @@ async function resolveSample(instrument, requestedMidi) {
       const debugEntry = { instrument, requestedTone: requestedTone.internationalName, sourceSample: mapping.tone.sampleFilename, semitoneDifference: mapping.difference, playbackRate };
       requestedMappingDebug.push(debugEntry);
       if (requestedMappingDebug.length > 40) requestedMappingDebug.shift();
+      lastSampleFailure = null;
       return { buffer, mapping, playbackRate, debugEntry, requestedTone };
-    } catch (error) { lastError = error; }
+    } catch (error) {
+      lastError = error;
+      lastSampleFailure = { instrument, requestedNote: requestedTone.internationalName, sourceSample: mapping.tone.sampleFilename,
+        semitoneDifference: mapping.difference, path: samplePath(instrument, mapping.tone.sampleFilename), message: error.message };
+    }
   }
   lastError.sampleMapping = lastMapping;
   lastError.attemptedPaths = attemptedPaths;
@@ -118,7 +218,7 @@ export async function checkRequiredSamples(instrument, notes) {
 
 export function stopAllSounds() {
   playbackToken += 1;
-  for (const source of [...activeSources]) {
+  for (const source of [...activeAudioBufferSourceNodes]) {
     try { source.stop(); } catch { /* A source may already have ended. */ }
   }
   return playbackToken;
@@ -126,15 +226,17 @@ export function stopAllSounds() {
 
 async function scheduleNotes(instrument, notes, options = {}) {
   if (!Array.isArray(notes) || !notes.length) throw new Error('There are no notes to play.');
+  const context = await ensureAudioReady();
   const token = stopAllSounds();
-  await initializeAudio();
   const resolved = await Promise.all(notes.map((midi) => resolveSample(instrument, midi)));
   if (token !== playbackToken) return false;
-  const now = audioContext.currentTime + 0.04;
+  if (context.state !== 'running') throw new Error('Audio was interrupted. Tap Play to continue.');
+  const now = context.currentTime + 0.04;
+  lastPlaybackStartTime = now;
   const spacing = options.spacing ?? 0;
   const promises = resolved.map((sample, index) => {
-    const source = audioContext.createBufferSource();
-    const envelope = audioContext.createGain();
+    const source = context.createBufferSource();
+    const envelope = context.createGain();
     const startOffset = options.humanize ? Math.random() * 0.015 : 0;
     const startAt = now + (options.simultaneous ? startOffset : index * spacing);
     const rate = sample.playbackRate;
@@ -150,9 +252,9 @@ async function scheduleNotes(instrument, notes, options = {}) {
     envelope.gain.linearRampToValueAtTime(0.0001, startAt + duration);
     source.connect(envelope);
     envelope.connect(masterGain);
-    activeSources.add(source);
+    activeAudioBufferSourceNodes.add(source);
     const ended = new Promise((resolve) => {
-      source.onended = () => { activeSources.delete(source); source.disconnect(); envelope.disconnect(); resolve(); };
+      source.onended = () => { activeAudioBufferSourceNodes.delete(source); source.disconnect(); envelope.disconnect(); resolve(); };
     });
     source.start(startAt);
     source.stop(startAt + duration + 0.005);
@@ -179,6 +281,24 @@ export function playArpeggio(instrument, notes, options = {}) {
 }
 
 export function getAudioDebugState() {
-  return { contextState: audioContext?.state ?? 'not-initialized', cachedBuffers: bufferCache.size, pendingLoads: pendingLoads.size,
-    activeSources: activeSources.size, playbackToken, lastAudioError, mappings: requestedMappingDebug.slice(-12) };
+  return {
+    contextState: audioContext?.state ?? 'not-initialized',
+    audioContextSupported: Boolean(window.AudioContext || window.webkitAudioContext),
+    usedWebkitAudioContext,
+    iosAudioUnlocked,
+    audioNeedsResume,
+    masterGainConnected,
+    audioSessionType: navigator.audioSession?.type ?? 'unsupported',
+    cachedBuffers: audioBufferCache.size,
+    loadingSamples: [...loadingPromises.keys()],
+    activeSources: activeAudioBufferSourceNodes.size,
+    playbackToken,
+    lastRequestedSampleURL,
+    lastSuccessfullyDecodedSample,
+    lastPlaybackStartTime,
+    visibilityState: document.visibilityState,
+    lastSampleFailure,
+    lastAudioError,
+    mappings: requestedMappingDebug.slice(-12)
+  };
 }
