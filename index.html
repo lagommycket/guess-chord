@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#f6f7f5">
   <meta name="description" content="Musical ear training with local piano and trumpet samples.">
   <title>Ear Training</title>
-  <link rel="stylesheet" href="./css/styles.css?v=1.1.2">
-  <script type="module" src="./js/app.js?v=1.1.2"></script>
+  <link rel="stylesheet" href="./css/styles.css?v=1.1.5">
+  <script type="module" src="./js/app.js?v=1.1.5"></script>
 </head>
 <body>
   <header class="topbar">
@@ -16,7 +16,7 @@
       <button class="text-button" id="nav-stats" type="button">Statistics</button>
       <button class="icon-button" id="nav-settings" type="button" aria-label="Open settings" title="Settings">⚙</button>
       <button class="text-button" id="show-debug" type="button" aria-label="Show debug panel" aria-controls="debug-panel" aria-expanded="false" title="Show debug panel" hidden>&lt;/&gt;</button>
-      <span class="version-label" id="app-version" aria-label="Version 1.1.2">v1.1.2</span>
+      <span class="version-label" id="app-version" aria-label="Version 1.1.5">v1.1.5</span>
     </nav>
   </header>
 
@@ -69,20 +69,19 @@
       </div>
       <div class="progress-row"><span id="question-progress">Attempt 1</span><div class="progress-track" id="progress-track" role="progressbar" aria-label="Training progress" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0"><span id="progress-fill"></span></div><span id="round-score">0 / 7 mastered</span></div>
       <div class="exercise-panel">
-        <button class="notation-indicator" id="notation-indicator" type="button"></button>
         <div class="play-area">
           <div class="play-actions">
+            <div class="feedback" id="feedback" role="status" aria-live="assertive" tabindex="-1" hidden></div>
             <span class="play-equalizer" id="play-equalizer" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
             <button class="play-button" id="play-question" type="button" aria-label="Play question"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 4 L20 12 L7 20 Z" fill="currentColor"/></svg></button>
-            <button class="primary-button compact next-button" id="next-question" type="button" aria-label="Next question" disabled>Next <span aria-hidden="true">→</span></button>
+            <button class="text-button next-button" id="next-question" type="button" aria-label="Next question" disabled>Next<span aria-hidden="true">→</span></button>
           </div>
           <p class="load-status" id="audio-status" role="status" aria-live="polite"></p>
         </div>
         <fieldset class="answer-group" id="answer-group">
-          <legend>Choose the matching answer</legend>
+          <legend><span>Choose the matching answer in</span><button class="notation-indicator" id="notation-indicator" type="button"></button></legend>
           <div class="answer-grid" id="answer-options"></div>
         </fieldset>
-        <div class="feedback-slot"><div class="feedback" id="feedback" role="status" aria-live="assertive" tabindex="-1" hidden></div></div>
         <div class="audio-alert" id="audio-alert" role="status" aria-live="assertive" hidden><p id="audio-alert-message"></p><button class="secondary-button compact" id="retry-audio" type="button">Retry</button><button class="text-button" id="go-samples-from-error" type="button">Test samples</button></div>
       </div>
       <div class="stat-strip" aria-label="Current statistics">

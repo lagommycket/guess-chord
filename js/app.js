@@ -7,7 +7,7 @@ import { recordAnswer, formatAccuracy } from './statistics.js';
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const viewIds = ['home-view', 'game-view', 'complete-view', 'samples-view', 'stats-view', 'error-view'];
-const APP_VERSION = '1.1.2';
+const APP_VERSION = '1.1.5';
 const instrumentLabels = { piano: 'Piano', trumpet: 'Trumpet' };
 const debugEnabled = new URLSearchParams(location.search).get('debug') === 'true';
 const loaded = loadData();
@@ -256,8 +256,9 @@ function renderAnswers(question) {
     button.setAttribute('aria-label', `Answer ${index + 1}: ${option.label}`);
     const number = document.createElement('span'); number.className = 'answer-number'; number.textContent = String(index + 1);
     const label = document.createElement('span'); label.textContent = option.label;
-    const result = document.createElement('span'); result.className = 'answer-result'; result.setAttribute('aria-hidden', 'true');
-    button.append(number, label, result);
+    const notation = document.createElement('span'); notation.className = 'answer-notation-badge'; notation.setAttribute('aria-hidden', 'true');
+    notation.textContent = state.settings[`${question.instrument}Notation`] === 'bb' ? 'B♭' : 'C';
+    button.append(number, label, notation);
     button.addEventListener('click', () => answerQuestion(option, button));
     container.append(button);
   });
@@ -355,20 +356,18 @@ function answerQuestion(option, button) {
   const buttons = [...$('#answer-options').querySelectorAll('button')];
   buttons.forEach((answerButton) => {
     answerButton.disabled = true;
-    if (answerButton.dataset.answerId === currentQuestion.correctAnswer.id) {
+    const isCorrectAnswer = answerButton.dataset.answerId === currentQuestion.correctAnswer.id;
+    if (isCorrectAnswer) {
       answerButton.classList.add('correct');
-      answerButton.querySelector('.answer-result').textContent = correct ? 'Correct' : 'Correct answer';
       answerButton.setAttribute('aria-label', `${answerButton.getAttribute('aria-label')}. Correct answer.`);
-    }
-    if (answerButton === button && !correct) {
+    } else {
       answerButton.classList.add('incorrect');
-      answerButton.querySelector('.answer-result').textContent = 'Your answer';
-      answerButton.setAttribute('aria-label', `${answerButton.getAttribute('aria-label')}. Your answer, incorrect.`);
+      answerButton.setAttribute('aria-label', `${answerButton.getAttribute('aria-label')}. ${answerButton === button ? 'Your answer, incorrect.' : 'Incorrect answer.'}`);
     }
   });
   const feedback = $('#feedback');
   feedback.className = `feedback ${correct ? 'is-correct' : 'is-wrong'}`;
-  feedback.textContent = correct ? `✓ Correct. ${currentQuestion.correctAnswer.label}` : `✕ Incorrect. The correct answer is ${currentQuestion.correctAnswer.label}.`;
+  feedback.textContent = correct ? 'Correct' : 'Missed';
   feedback.hidden = false;
   $('#next-question').disabled = false;
   if (!trainingSession.queue.length) {
@@ -580,6 +579,7 @@ function refreshQuestionLabels() {
   for (const [index, option] of currentQuestion.answerOptions.entries()) {
     const button = $('#answer-options').querySelectorAll('button')[index];
     button.querySelector('span:nth-child(2)').textContent = option.label;
+    button.querySelector('.answer-notation-badge').textContent = state.settings[`${currentQuestion.instrument}Notation`] === 'bb' ? 'B♭' : 'C';
     let label = `Answer ${index + 1}: ${option.label}`;
     if (button.classList.contains('correct')) label += '. Correct answer.';
     else if (button.classList.contains('incorrect')) label += '. Your answer, incorrect.';
