@@ -2,6 +2,8 @@
 
 A fully static web app for musical ear training. Practice single notes, scales, and triads using piano or trumpet samples. The app does not send usage data and requires no backend or database.
 
+Choose a key and practice notes from a major or minor scale, or practice the available scale and chord types for that key. Each session covers a finite set: correct answers are mastered, missed items return later, and the session ends once every item is correct. Note sets contain the seven distinct scale notes within one octave; the app selects an available octave for each instrument. Session progress resets when leaving or reloading the session.
+
 The header displays the app version. Update the `APP_VERSION` constant in `js/app.js` whenever the app changes; use the patch segment for routine updates and keep the README in step with the displayed value.
 
 ## Projektstruktur
@@ -15,6 +17,7 @@ js/game-engine.js
 js/music-data.js
 js/statistics.js
 js/storage.js
+tests/training.test.mjs
 audio/piano/
 audio/trumpet/
 licenses/
@@ -37,6 +40,8 @@ Then open [http://localhost:8000](http://localhost:8000) in your browser. A loca
 Selected piano and trumpet samples from the credited repositories are included in `audio/piano/` and `audio/trumpet/`. The app uses only these local files at runtime; it has no synthesizer fallback and does not download samples.
 
 The included source pitches are C3, Eb3, F#3, A3, C4, Eb4, F#4, A4, C5, Eb5, F#5, A5, and C6 for piano; and C3, Eb3, G3, Bb3, D4, F4, A4, and C5 for trumpet. The source-pitch map in `js/music-data.js` is the authoritative list. All other pitches are played from the nearest mapped sample, transposed by at most three semitones.
+
+Trumpet answers default to written B♭ notation, a whole step above the sounding concert pitch (for example, concert B♭3 is written C4). Piano defaults to C (concert pitch). Either instrument can use either notation through Settings or the notation button during a question. The setting changes labels, not the sounds. Source: [Trumpet transposition](https://en.wikipedia.org/wiki/Trumpet#Types).
 
 Piano FLAC samples are converted from the Salamander V3 source recordings; trumpet WAV samples are converted from VSCO 2 CE sustained notes. Conversion changes file format only. Full attribution and license notices are in `licenses/`, and are also available from the Sample credits popover in Settings.
 
@@ -65,7 +70,7 @@ The sample test only loads audio after an explicit user action. For each note, i
 
 ### Safari and iOS
 
-On iPhone and iPad, tap **Start training** or **Play** to unlock the shared Web Audio context. The app does not autoplay the first question on iOS; tap **Play** when ready. If Safari suspends audio after the page is backgrounded, the next Play action resumes it. The sample screen's **Test audio system** button checks context creation, sample fetch/decode, and playback using the local piano C3 sample.
+On iPhone and iPad, tap **Start training** or **Play** to unlock the shared Web Audio context. When automatic playback is enabled, new questions play after their samples load. If Safari suspends audio after the page is backgrounded, the next Play action resumes it. The sample screen's **Test audio system** button checks context creation, sample fetch/decode, and playback using the local piano C3 sample.
 
 ## Settings and data
 
@@ -73,7 +78,7 @@ Settings and statistics are saved in this browser's `localStorage`. AudioBuffers
 
 Export and import statistics as JSON from the Statistics view. Import only replaces existing data after confirmation, accepts the supported data version, and keeps only known fields.
 
-Add `?debug=true` to the URL to show the debug panel. It includes the current question and settings, audio state, cache and source information, and recent errors. It avoids unnecessary browser details.
+Add `?debug=true` to the URL to enable the debug button in the header, then select it to open the debug panel. The panel includes the current question and settings, audio state, cache and source information, and recent errors. It avoids unnecessary browser details.
 
 ## GitHub Pages
 
@@ -119,7 +124,8 @@ Salamander Grand Piano V3 by Alexander Holm is licensed under Creative Commons A
 - [ ] There are always exactly three answers.
 - [ ] Exactly one answer is correct.
 - [ ] The correct answer does not have a fixed position.
-- [ ] The same question does not repeat immediately.
+- [ ] Missed items return to the queue until answered correctly.
+- [ ] Each mastered item is removed, and the set completes only when all are mastered.
 - [ ] All answer buttons are disabled after answering.
 - [ ] The next question is only available after answering.
 - [ ] Chords stay within the available pitch range.
@@ -145,6 +151,12 @@ Salamander Grand Piano V3 by Alexander Holm is licensed under Creative Commons A
 - [ ] Screen readers receive feedback through `aria-live`.
 
 ## Validation
+
+Run the trainer regression tests with a recent Node.js version:
+
+```sh
+node --test tests/training.test.mjs
+```
 
 Check JavaScript syntax without installing dependencies:
 

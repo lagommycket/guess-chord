@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101513">
+  <meta name="theme-color" content="#f6f7f5">
   <meta name="description" content="Musical ear training with local piano and trumpet samples.">
   <title>Ear Training</title>
-  <link rel="stylesheet" href="./css/styles.css?v=1.0.4">
-  <script type="module" src="./js/app.js?v=1.0.4"></script>
+  <link rel="stylesheet" href="./css/styles.css?v=1.1.2">
+  <script type="module" src="./js/app.js?v=1.1.2"></script>
 </head>
 <body>
   <header class="topbar">
@@ -15,24 +15,29 @@
     <nav aria-label="Main navigation">
       <button class="text-button" id="nav-stats" type="button">Statistics</button>
       <button class="icon-button" id="nav-settings" type="button" aria-label="Open settings" title="Settings">⚙</button>
-      <span class="version-label" id="app-version" aria-label="Version 1.0.4">v1.0.4</span>
+      <button class="text-button" id="show-debug" type="button" aria-label="Show debug panel" aria-controls="debug-panel" aria-expanded="false" title="Show debug panel" hidden>&lt;/&gt;</button>
+      <span class="version-label" id="app-version" aria-label="Version 1.1.2">v1.1.2</span>
     </nav>
   </header>
 
   <main class="shell">
     <section class="view active" id="home-view" aria-labelledby="home-title">
       <div class="intro">
-        <p class="eyebrow">LISTEN · IDENTIFY · GROW</p>
-        <h1 id="home-title" tabindex="-1">Ear Training</h1>
-        <p class="lede">Train your musical ear with real instrument samples. Listen closely and choose the matching answer.</p>
+        <p class="eyebrow">EAR TRAINING / PRACTICE</p>
+        <h1 id="home-title" tabindex="-1">Choose your set.</h1>
+      </div>
+      <div class="set-controls" aria-label="Practice set">
+        <label>Key<select id="training-root"><option value="0">C</option><option value="1">C#</option><option value="2">D</option><option value="3">E♭</option><option value="4">E</option><option value="5">F</option><option value="6">F#</option><option value="7">G</option><option value="8">A♭</option><option value="9">A</option><option value="10">B♭</option><option value="11">B</option></select></label>
+        <label id="training-scale-field">Scale<select id="training-scale"><option value="major">Major</option><option value="naturalMinor">Natural minor</option><option value="harmonicMinor">Harmonic minor</option><option value="melodicMinor">Melodic minor</option></select></label>
+        <div class="set-summary"><span>YOUR SET</span><strong id="training-set-summary">C major · 7 notes</strong><span class="set-notes" id="training-set-notes">C · D · E · F · G · A · B</span></div>
       </div>
       <div class="setup-grid">
         <fieldset class="choice-group">
-          <legend>Exercise mode</legend>
+          <legend>Practice</legend>
           <div class="segmented" id="home-mode">
-            <label><input type="radio" name="home-mode" value="note" checked><span>Single note</span></label>
-            <label><input type="radio" name="home-mode" value="scale"><span>Scale</span></label>
-            <label><input type="radio" name="home-mode" value="chord"><span>Chord</span></label>
+            <label><input type="radio" name="home-mode" value="note" checked><span>Notes</span></label>
+            <label><input type="radio" name="home-mode" value="scale"><span>Scales</span></label>
+            <label><input type="radio" name="home-mode" value="chord"><span>Chords</span></label>
           </div>
         </fieldset>
         <fieldset class="choice-group">
@@ -52,10 +57,9 @@
         </fieldset>
       </div>
       <div class="home-actions">
-        <button class="primary-button" id="start-training" type="button"><span aria-hidden="true">▶</span> Start training</button>
+        <button class="primary-button" id="start-training" type="button"><svg class="start-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 4 L20 12 L7 20 Z" fill="currentColor"/></svg> Start training</button>
         <button class="secondary-button" id="open-samples" type="button">Test samples</button>
       </div>
-      <p class="note-line">Real piano and trumpet samples are stored locally. No audio is fetched from external services.</p>
     </section>
 
     <section class="view" id="game-view" aria-labelledby="game-title" hidden>
@@ -63,11 +67,13 @@
         <div><p class="eyebrow" id="game-context">SINGLE NOTE · PIANO · EASY</p><h1 id="game-title" tabindex="-1">What did you hear?</h1></div>
         <button class="secondary-button compact" id="exit-game" type="button">End training</button>
       </div>
-      <div class="progress-row"><span id="question-progress">Question 1</span><div class="progress-track" role="progressbar" aria-label="Training progress"><span id="progress-fill"></span></div><span id="round-score">0 correct</span></div>
+      <div class="progress-row"><span id="question-progress">Attempt 1</span><div class="progress-track" id="progress-track" role="progressbar" aria-label="Training progress" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0"><span id="progress-fill"></span></div><span id="round-score">0 / 7 mastered</span></div>
       <div class="exercise-panel">
+        <button class="notation-indicator" id="notation-indicator" type="button"></button>
         <div class="play-area">
           <div class="play-actions">
-            <button class="play-button" id="play-question" type="button" aria-label="Play question"><span aria-hidden="true">▶</span></button>
+            <span class="play-equalizer" id="play-equalizer" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+            <button class="play-button" id="play-question" type="button" aria-label="Play question"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 4 L20 12 L7 20 Z" fill="currentColor"/></svg></button>
             <button class="primary-button compact next-button" id="next-question" type="button" aria-label="Next question" disabled>Next <span aria-hidden="true">→</span></button>
           </div>
           <p class="load-status" id="audio-status" role="status" aria-live="polite"></p>
@@ -80,11 +86,19 @@
         <div class="audio-alert" id="audio-alert" role="status" aria-live="assertive" hidden><p id="audio-alert-message"></p><button class="secondary-button compact" id="retry-audio" type="button">Retry</button><button class="text-button" id="go-samples-from-error" type="button">Test samples</button></div>
       </div>
       <div class="stat-strip" aria-label="Current statistics">
-        <div><span class="stat-value" id="score-value">0</span><span class="stat-label">Score</span></div>
-        <div><span class="stat-value" id="rate-value">0%</span><span class="stat-label">Accuracy</span></div>
-        <div><span class="stat-value" id="streak-value">0</span><span class="stat-label">Streak</span></div>
-        <div><span class="stat-value" id="best-streak-value">0</span><span class="stat-label">Best streak</span></div>
+        <div><span class="stat-value" id="score-value">0</span><span class="stat-label">Mastered</span></div>
+        <div><span class="stat-value" id="rate-value">0</span><span class="stat-label">Remaining</span></div>
+        <div><span class="stat-value" id="streak-value">0</span><span class="stat-label">Attempts</span></div>
+        <div><span class="stat-value" id="best-streak-value">0%</span><span class="stat-label">Accuracy</span></div>
       </div>
+    </section>
+
+    <section class="view completion-view" id="complete-view" aria-labelledby="complete-title" hidden>
+      <p class="eyebrow">PRACTICE COMPLETE</p>
+      <h1 id="complete-title" tabindex="-1">Set mastered.</h1>
+      <p class="completion-set" id="completion-set"></p>
+      <div class="completion-metrics"><div><strong id="completion-mastered">0</strong><span>mastered</span></div><div><strong id="completion-attempts">0</strong><span>attempts</span></div><div><strong id="completion-accuracy">0%</strong><span>accuracy</span></div></div>
+      <div class="home-actions"><button class="primary-button" id="restart-training" type="button">Practice again</button><button class="secondary-button" id="change-training" type="button">Choose another set</button></div>
     </section>
 
     <section class="view" id="samples-view" aria-labelledby="samples-title" hidden>
@@ -111,10 +125,12 @@
 
   <dialog id="settings-dialog" aria-labelledby="settings-title">
     <form method="dialog" class="dialog-shell" id="settings-form">
-      <div class="dialog-heading"><div><p class="eyebrow">YOUR PRACTICE</p><h2 id="settings-title">Settings</h2></div><button class="icon-button" value="close" aria-label="Close settings">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow">YOUR PRACTICE</p><h2 id="settings-title">Settings</h2></div><button class="icon-button" id="close-settings" type="button" aria-label="Close settings">×</button></div>
       <div class="settings-grid">
         <label>Exercise mode<select name="mode"><option value="note">Single note</option><option value="scale">Scale</option><option value="chord">Chord</option></select></label>
         <label>Instrument<select name="instrument"><option value="piano">Piano</option><option value="trumpet">Trumpet</option></select></label>
+        <label>Trumpet notation<select name="trumpetNotation"><option value="bb">B♭ (written)</option><option value="concert">C (concert pitch)</option></select></label>
+        <label>Piano notation<select name="pianoNotation"><option value="concert">C (concert pitch)</option><option value="bb">B♭ (written)</option></select></label>
         <label>Difficulty<select name="difficulty"><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></label>
         <label class="range-label">Master volume <output id="volume-output">75%</output><input name="volume" type="range" min="0" max="1" step="0.01"></label>
         <label class="wide">Scale direction<select name="scaleDirection"><option value="up">Ascending only</option><option value="up-down">Ascending and descending</option><option value="random">Random (hard)</option></select></label>
@@ -123,7 +139,7 @@
         <label class="toggle"><input name="volumeVariation" type="checkbox"><span>Subtle volume variation</span></label>
         <label class="toggle wide"><input name="autoPlay" type="checkbox"><span>Play each new question automatically</span></label>
       </div>
-      <div class="settings-footer"><button class="secondary-button" id="settings-samples" type="button">Test samples</button><button class="secondary-button" id="settings-statistics" type="button">Statistics</button><button class="secondary-button" id="open-sample-credits" type="button" aria-controls="sample-credits" aria-expanded="false">ⓘ Sample credits</button><button class="primary-button" value="close">Done</button></div>
+      <div class="settings-footer"><button class="secondary-button" id="settings-samples" type="button">Test samples</button><button class="secondary-button" id="settings-statistics" type="button">Statistics</button><button class="secondary-button" id="open-sample-credits" type="button" aria-controls="sample-credits" aria-expanded="false">ⓘ Sample credits</button><button class="primary-button" id="settings-done" type="button">Done</button></div>
     </form>
     <aside class="credits-popover" id="sample-credits" role="dialog" aria-modal="false" aria-labelledby="credits-title" hidden>
       <div class="dialog-heading"><h2 id="credits-title">Sample credits</h2><button class="icon-button" id="close-sample-credits" type="button" aria-label="Close sample credits">×</button></div>

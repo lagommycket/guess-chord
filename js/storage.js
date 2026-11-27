@@ -4,7 +4,8 @@ export const STORAGE_VERSION = 1;
 export const DEFAULT_SETTINGS = {
   mode: 'note', instrument: 'piano', difficulty: 'easy', volume: 0.75,
   scaleDirection: 'up', chordPlayback: 'simultaneous', humanize: false,
-  volumeVariation: false, autoPlay: true
+  volumeVariation: false, autoPlay: true, trumpetNotation: 'bb', pianoNotation: 'concert',
+  trainingRoot: 0, trainingScale: 'major'
 };
 
 export function defaultStatistics() {
@@ -21,6 +22,10 @@ function validSettings(candidate) {
   if (!['easy', 'medium', 'hard'].includes(settings.difficulty)) settings.difficulty = DEFAULT_SETTINGS.difficulty;
   if (!['up', 'up-down', 'random'].includes(settings.scaleDirection)) settings.scaleDirection = DEFAULT_SETTINGS.scaleDirection;
   if (!['simultaneous', 'arpeggio'].includes(settings.chordPlayback)) settings.chordPlayback = DEFAULT_SETTINGS.chordPlayback;
+  if (!['bb', 'concert'].includes(settings.trumpetNotation)) settings.trumpetNotation = DEFAULT_SETTINGS.trumpetNotation;
+  if (!['bb', 'concert'].includes(settings.pianoNotation)) settings.pianoNotation = DEFAULT_SETTINGS.pianoNotation;
+  if (!Number.isInteger(settings.trainingRoot) || settings.trainingRoot < 0 || settings.trainingRoot > 11) settings.trainingRoot = DEFAULT_SETTINGS.trainingRoot;
+  if (!['major', 'naturalMinor', 'harmonicMinor', 'melodicMinor'].includes(settings.trainingScale)) settings.trainingScale = DEFAULT_SETTINGS.trainingScale;
   settings.volume = Number.isFinite(Number(settings.volume)) ? Math.max(0, Math.min(1, Number(settings.volume))) : DEFAULT_SETTINGS.volume;
   for (const key of ['humanize', 'volumeVariation', 'autoPlay']) settings[key] = Boolean(settings[key]);
   return settings;

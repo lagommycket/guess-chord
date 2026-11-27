@@ -1,16 +1,14 @@
-import { getAllTonesForDifficulty, formatNoteName, findSampleSource, getRequiredSampleFilenames } from './music-data.js';
-import { createQuestion, getNextQuestion, checkAnswer } from './game-engine.js';
-import { ensureAudioReady, isIOSWebKit, loadSample, setMasterVolume, playSingleNote, playScale, playChord, playArpeggio, stopAllSounds, checkRequiredSamples, getAudioDebugState } from './audio-engine.js?v=1.0.3';
-import { loadData, saveData, defaultStatistics, createExport, parseImport, STORAGE_VERSION } from './storage.js';
+import { getAllTonesForDifficulty, formatNoteName, findSampleSource, getRequiredSampleFilenames, SCALES, CHORDS } from './music-data.js';
+import { createTrainingSession, createTrainingQuestion, recordTrainingResult, checkAnswer, relabelQuestion } from './game-engine.js?v=1.1.1';
+import { ensureAudioReady, loadSample, setMasterVolume, playSingleNote, playScale, playChord, playArpeggio, stopAllSounds, checkRequiredSamples, getAudioDebugState } from './audio-engine.js?v=1.0.3';
+import { loadData, saveData, defaultStatistics, createExport, parseImport, STORAGE_VERSION } from './storage.js?v=1.1.1';
 import { recordAnswer, formatAccuracy } from './statistics.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const viewIds = ['home-view', 'game-view', 'samples-view', 'stats-view', 'error-view'];
-const APP_VERSION = '1.0.4';
-const modeLabels = { note: 'Single note', scale: 'Scale', chord: 'Chord' };
+const viewIds = ['home-view', 'game-view', 'complete-view', 'samples-view', 'stats-view', 'error-view'];
+const APP_VERSION = '1.1.2';
 const instrumentLabels = { piano: 'Piano', trumpet: 'Trumpet' };
-const difficultyLabels = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 const debugEnabled = new URLSearchParams(location.search).get('debug') === 'true';
 const loaded = loadData();
 let state = loaded.data;
@@ -20,8 +18,10 @@ let busy = false;
 let audioReady = false;
 let questionToken = 0;
 let gameCorrect = 0;
-let gameAnswered = 0;
+let trainingSession = null;
+let trainingSetName = '';
 let settingsChangedDuringDialog = false;
+let settingsAtOpen = null;
 let settingsReturnFocus = null;
 let skipSettingsCloseUpdate = false;
 let lastError = null;
@@ -30,6 +30,12 @@ let sampleResults = new Map();
 setMasterVolume(state.settings.volume);
 
 function showView(id) {
+  if (id !== 'game-view' && $('#game-view').classList.contains('active')) {
+    stopAllSounds();
+    questionToken += 1;
+    currentQuestion = null;
+    trainingSession = null;
+  }
   for (const viewId of viewIds) {
     const view = document.getElementById(viewId);
     const active = viewId === id;
@@ -70,6 +76,20 @@ function updateHomeControls() {
     const input = $(`input[name="home-${name}"][value="${value}"]`);
     if (input) input.checked = true;
   }
+  $('#training-root').value = String(state.settings.trainingRoot);
+  $('#training-scale').value = state.settings.trainingScale;
+  updateSetSummary();
+}
+
+function updateSetSummary() {
+  const mode = $('input[name="home-mode"]:checked').value;
+  const root = $('#training-root').selectedOptions[0].textContent;
+  const scale = SCALES[$('#training-scale').value];
+  $('#training-scale-field').hidden = mode !== 'note';
+  $('#training-set-summary').textContent = mode === 'note' ? `${root} ${scale.label.toLowerCase()} · 7 notes` : `${root} · 4 ${mode === 'scale' ? 'scales' : 'chords'}`;
+  $('#training-set-notes').textContent = mode === 'note'
+    ? scale.intervals.slice(0, -1).map((interval) => formatNoteName({ pitchClass: (Number($('#training-root').value) + interval) % 12, octave: 4 })).join(' · ')
+    : Object.values(mode === 'scale' ? SCALES : CHORDS).map((entry) => entry.label).join(' · ');
 }
 
 function openSettings(trigger = document.activeElement) {
@@ -83,6 +103,7 @@ function openSettings(trigger = document.activeElement) {
   }
   $('#volume-output').value = `${Math.round(state.settings.volume * 100)}%`;
   settingsChangedDuringDialog = false;
+  settingsAtOpen = { ...state.settings };
   $('#settings-dialog').showModal();
   form.querySelector('button[aria-label]').focus();
 }
@@ -106,7 +127,7 @@ function updateStatsView() {
 function updateDebug() {
   if (!debugEnabled) return;
   const summary = {
-    appVersion: APP_VERSION, question: currentQuestion, settings: state.settings, audio: getAudioDebugState(),
+    appVersion: APP_VERSION, question: currentQuestion, settings: state.settings, trainingSession, audio: getAudioDebugState(),
     browserUserAgent: navigator.userAgent,
     audioContextSupported: Boolean(window.AudioContext || window.webkitAudioContext),
     webkitAudioContextUsed: getAudioDebugState().usedWebkitAudioContext,
@@ -157,9 +178,11 @@ async function runAudioSystemTest(output) {
   }
 }
 
-function setBusy(value, message = '') {
+function setBusy(value, message = '', playing = false) {
   busy = value;
   $('#audio-status').textContent = message || (value ? 'Loading samples …' : '');
+  $('#audio-status').classList.toggle('is-playing', playing);
+  $('#play-equalizer').classList.toggle('is-playing', playing);
   $('#play-question').disabled = value;
   $('#answer-options').querySelectorAll('button').forEach((button) => { button.disabled = !audioReady || answered; });
 }
@@ -168,7 +191,35 @@ function playbackOptions() {
   return { humanize: state.settings.humanize, volumeVariation: state.settings.volumeVariation };
 }
 
-function shouldAutoplayQuestion() { return state.settings.autoPlay && !isIOSWebKit(); }
+function updateNotationIndicator() {
+  const button = $('#notation-indicator');
+  const notation = state.settings[`${currentQuestion.instrument}Notation`];
+  button.textContent = notation === 'bb' ? 'B♭' : 'C';
+  button.setAttribute('aria-label', notation === 'bb' ? 'B-flat notation. Switch to concert pitch' : 'Concert pitch. Switch to B-flat notation');
+  button.title = notation === 'bb' ? 'Switch to concert pitch' : 'Switch to B-flat notation';
+}
+
+function shouldAutoplayQuestion() { return state.settings.autoPlay; }
+
+function updateTrainingProgress() {
+  const { mastered, total, attempts, queue } = trainingSession;
+  $('#question-progress').textContent = `Attempt ${Math.max(1, attempts + (answered ? 0 : 1))}`;
+  $('#round-score').textContent = `${mastered} / ${total} mastered`;
+  $('#progress-track').setAttribute('aria-valuemax', String(total));
+  $('#progress-track').setAttribute('aria-valuenow', String(mastered));
+  $('#progress-fill').style.width = `${mastered / total * 100}%`;
+  $('#score-value').textContent = String(mastered);
+  $('#rate-value').textContent = String(queue.length);
+  $('#streak-value').textContent = String(attempts);
+  $('#best-streak-value').textContent = `${attempts ? Math.round(gameCorrect / attempts * 100) : 0}%`;
+}
+
+function updateTrainingSetName() {
+  const notation = state.settings[`${currentQuestion.instrument}Notation`];
+  const root = formatNoteName(trainingSession.rootMidi + (notation === 'bb' ? 2 : 0));
+  trainingSetName = trainingSession.mode === 'note' ? `${root} ${SCALES[trainingSession.scale].label.toLowerCase()} · ${trainingSession.total} notes` : `${root} · ${trainingSession.total} ${trainingSession.mode === 'scale' ? 'scales' : 'chords'}`;
+  $('#game-context').textContent = `${trainingSetName} · ${instrumentLabels[currentQuestion.instrument]}`;
+}
 
 async function playCurrentQuestion() {
   if (!currentQuestion || busy) return;
@@ -177,7 +228,7 @@ async function playCurrentQuestion() {
   $('#audio-alert').hidden = true;
   try {
     await ensureAudioReady();
-    setBusy(true, 'Playing audio …');
+    setBusy(true, 'Playing audio …', true);
     if (currentQuestion.mode === 'note') await playSingleNote(currentQuestion.instrument, currentQuestion.playbackNotes[0]);
     else if (currentQuestion.mode === 'scale') await playScale(currentQuestion.instrument, currentQuestion.playbackNotes, playbackOptions());
     else if (currentQuestion.playbackType === 'arpeggio') await playArpeggio(currentQuestion.instrument, currentQuestion.playbackNotes, playbackOptions());
@@ -219,13 +270,14 @@ async function prepareQuestion(question, shouldAutoplay = false) {
   questionToken += 1;
   const thisToken = questionToken;
   stopAllSounds();
-  $('#game-context').textContent = `${modeLabels[question.mode]} · ${instrumentLabels[question.instrument]} · ${difficultyLabels[question.difficulty]}`.toLocaleUpperCase('en-US');
-  $('#question-progress').textContent = `Question ${gameAnswered + 1}`;
-  $('#round-score').textContent = `${gameCorrect} correct`;
-  $('#progress-fill').style.width = `${Math.min(100, gameAnswered % 10 * 10)}%`;
+  updateNotationIndicator();
+  updateTrainingSetName();
+  updateTrainingProgress();
   $('#feedback').hidden = true;
   $('#audio-alert').hidden = true;
   $('#next-question').disabled = true;
+  $('#next-question').firstChild.textContent = 'Next ';
+  $('#next-question').setAttribute('aria-label', 'Next question');
   $('#play-question').setAttribute('aria-label', 'Play question');
   renderAnswers(question);
   $('#play-question').disabled = true;
@@ -253,8 +305,8 @@ async function prepareQuestion(question, shouldAutoplay = false) {
     audioReady = true;
     setBusy(false);
     updateDebug();
-    if (shouldAutoplay && !isIOSWebKit()) await playCurrentQuestion();
-    if (thisToken === questionToken) $('#play-question').focus();
+    if (shouldAutoplay) await playCurrentQuestion();
+    if (thisToken === questionToken && !answered) $('#play-question').focus();
   } catch (error) {
     if (thisToken !== questionToken) return;
     lastError = error.message;
@@ -270,13 +322,17 @@ async function startTraining() {
   state.settings.mode = $('input[name="home-mode"]:checked').value;
   state.settings.instrument = $('input[name="home-instrument"]:checked').value;
   state.settings.difficulty = $('input[name="home-difficulty"]:checked').value;
+  state.settings.trainingRoot = Number($('#training-root').value);
+  state.settings.trainingScale = $('#training-scale').value;
   persist();
-  gameCorrect = 0; gameAnswered = 0;
+  gameCorrect = 0;
   try {
     await ensureAudioReady();
+    trainingSession = createTrainingSession(state.settings);
+    trainingSetName = $('#training-set-summary').textContent;
     showView('game-view');
     focusViewHeading('#game-title');
-    await prepareQuestion(createQuestion(state.settings), shouldAutoplayQuestion());
+    await prepareQuestion(createTrainingQuestion(state.settings, trainingSession), shouldAutoplayQuestion());
   } catch (error) { showFatalError(error); }
 }
 
@@ -292,7 +348,7 @@ function answerQuestion(option, button) {
   answered = true;
   setBusy(false);
   const correct = checkAnswer(currentQuestion, option);
-  gameAnswered += 1;
+  recordTrainingResult(trainingSession, currentQuestion, correct);
   if (correct) gameCorrect += 1;
   state.statistics = recordAnswer(state.statistics, currentQuestion, option, correct);
   persist();
@@ -315,20 +371,31 @@ function answerQuestion(option, button) {
   feedback.textContent = correct ? `✓ Correct. ${currentQuestion.correctAnswer.label}` : `✕ Incorrect. The correct answer is ${currentQuestion.correctAnswer.label}.`;
   feedback.hidden = false;
   $('#next-question').disabled = false;
-  $('#score-value').textContent = String(gameCorrect);
-  $('#rate-value').textContent = formatAccuracy(state.statistics);
-  $('#streak-value').textContent = String(state.statistics.currentStreak);
-  $('#best-streak-value').textContent = String(state.statistics.bestStreak);
-  $('#round-score').textContent = `${gameCorrect} correct`;
+  if (!trainingSession.queue.length) {
+    $('#next-question').firstChild.textContent = 'Finish ';
+    $('#next-question').setAttribute('aria-label', 'Finish practice');
+  }
+  updateTrainingProgress();
   feedback.focus();
   updateDebug();
 }
 
 async function nextQuestion() {
   if (!answered || busy) return;
+  if (!trainingSession.queue.length) {
+    stopAllSounds();
+    $('#completion-set').textContent = `${trainingSetName} · ${instrumentLabels[state.settings.instrument]}`;
+    $('#completion-mastered').textContent = String(trainingSession.mastered);
+    $('#completion-attempts').textContent = String(trainingSession.attempts);
+    $('#completion-accuracy').textContent = `${Math.round(gameCorrect / trainingSession.attempts * 100)}%`;
+    currentQuestion = null;
+    showView('complete-view');
+    focusViewHeading('#complete-title');
+    return;
+  }
   try {
     await ensureAudioReady();
-    const next = getNextQuestion(state.settings, currentQuestion);
+    const next = createTrainingQuestion(state.settings, trainingSession);
     await prepareQuestion(next, shouldAutoplayQuestion());
   } catch (error) { showFatalError(error); }
 }
@@ -466,7 +533,15 @@ function resetStatistics() {
 }
 
 $('#start-training').addEventListener('click', startTraining);
+$('#restart-training').addEventListener('click', startTraining);
+$('#change-training').addEventListener('click', goHome);
+$('#training-root').addEventListener('change', (event) => { state.settings.trainingRoot = Number(event.target.value); updateSetSummary(); persist(); });
+$('#training-scale').addEventListener('change', (event) => { state.settings.trainingScale = event.target.value; updateSetSummary(); persist(); });
+$$('input[name^="home-"]').forEach((input) => input.addEventListener('change', () => { state.settings[input.name.slice(5)] = input.value; updateSetSummary(); persist(); }));
 $('#nav-settings').addEventListener('click', (event) => openSettings(event.currentTarget));
+$('#settings-form').addEventListener('submit', (event) => event.preventDefault());
+$('#close-settings').addEventListener('click', () => $('#settings-dialog').close());
+$('#settings-done').addEventListener('click', () => $('#settings-dialog').close());
 $('#settings-dialog').addEventListener('cancel', (event) => {
   if ($('#sample-credits').hidden) return;
   event.preventDefault();
@@ -475,8 +550,8 @@ $('#settings-dialog').addEventListener('cancel', (event) => {
 $('#settings-dialog').addEventListener('close', async () => {
   closeSampleCredits();
   if (!skipSettingsCloseUpdate && settingsChangedDuringDialog && currentQuestion && $('#game-view').classList.contains('active')) {
-    try { await ensureAudioReady(); await prepareQuestion(createQuestion(state.settings), shouldAutoplayQuestion()); }
-    catch (error) { showFatalError(error); }
+    if (['mode', 'instrument', 'difficulty'].some((key) => settingsAtOpen[key] !== state.settings[key])) await startTraining();
+    else if (['pianoNotation', 'trumpetNotation'].some((key) => settingsAtOpen[key] !== state.settings[key])) refreshQuestionLabels();
   }
   skipSettingsCloseUpdate = false;
   if ($('#samples-view').classList.contains('active')) focusViewHeading('#samples-title');
@@ -500,6 +575,34 @@ $('#sample-credits').addEventListener('keydown', (event) => {
   closeSampleCredits(true);
 });
 $('#play-question').addEventListener('click', playCurrentQuestion);
+function refreshQuestionLabels() {
+  currentQuestion = relabelQuestion(currentQuestion, state.settings);
+  for (const [index, option] of currentQuestion.answerOptions.entries()) {
+    const button = $('#answer-options').querySelectorAll('button')[index];
+    button.querySelector('span:nth-child(2)').textContent = option.label;
+    let label = `Answer ${index + 1}: ${option.label}`;
+    if (button.classList.contains('correct')) label += '. Correct answer.';
+    else if (button.classList.contains('incorrect')) label += '. Your answer, incorrect.';
+    button.setAttribute('aria-label', label);
+  }
+  if (answered) {
+    const correct = !$('#feedback').classList.contains('is-wrong');
+    $('#feedback').textContent = correct ? `✓ Correct. ${currentQuestion.correctAnswer.label}` : `✕ Incorrect. The correct answer is ${currentQuestion.correctAnswer.label}.`;
+  }
+  updateNotationIndicator();
+  const notation = state.settings[`${currentQuestion.instrument}Notation`];
+  state.settings.trainingRoot = (trainingSession.rootMidi + (notation === 'bb' ? 2 : 0)) % 12;
+  $('#training-root').value = String(state.settings.trainingRoot);
+  updateSetSummary();
+  updateTrainingSetName();
+  persist();
+}
+$('#notation-indicator').addEventListener('click', () => {
+  if (!currentQuestion) return;
+  const key = `${currentQuestion.instrument}Notation`;
+  state.settings[key] = state.settings[key] === 'bb' ? 'concert' : 'bb';
+  refreshQuestionLabels();
+});
 $('#retry-audio').addEventListener('click', async () => {
   if (!currentQuestion || busy) return;
   try {
@@ -512,7 +615,8 @@ $('#go-samples-from-error').addEventListener('click', goSamples);
 $('#next-question').addEventListener('click', nextQuestion);
 function goHome() { showView('home-view'); focusViewHeading('#home-title'); }
 
-$('#exit-game').addEventListener('click', () => { stopAllSounds(); currentQuestion = null; goHome(); });
+$('.brand').addEventListener('click', (event) => { event.preventDefault(); goHome(); });
+$('#exit-game').addEventListener('click', goHome);
 $('#open-samples').addEventListener('click', goSamples);
 $('#samples-back').addEventListener('click', goHome);
 $('#sample-instrument').addEventListener('change', () => { sampleResults.clear(); renderSampleList(); });
@@ -521,7 +625,20 @@ $('#sample-filter').addEventListener('change', renderSampleList);
 $('#check-all-samples').addEventListener('click', checkAllSamples);
 $('#test-audio-system').addEventListener('click', () => runAudioSystemTest($('#audio-system-status')));
 $('#debug-test-audio').addEventListener('click', () => runAudioSystemTest($('#debug-test-status')));
-$('#hide-debug').addEventListener('click', () => { $('#debug-panel').hidden = true; });
+$('#show-debug').addEventListener('click', () => {
+  const panel = $('#debug-panel');
+  panel.hidden = !panel.hidden;
+  $('#show-debug').setAttribute('aria-expanded', String(!panel.hidden));
+  $('#show-debug').setAttribute('aria-label', panel.hidden ? 'Show debug panel' : 'Hide debug panel');
+  $('#show-debug').title = panel.hidden ? 'Show debug panel' : 'Hide debug panel';
+  if (!panel.hidden) updateDebug();
+});
+$('#hide-debug').addEventListener('click', () => {
+  $('#debug-panel').hidden = true;
+  $('#show-debug').setAttribute('aria-expanded', 'false');
+  $('#show-debug').setAttribute('aria-label', 'Show debug panel');
+  $('#show-debug').title = 'Show debug panel';
+});
 $('#nav-stats').addEventListener('click', showStats);
 $('#stats-back').addEventListener('click', goHome);
 $('#export-stats').addEventListener('click', exportStatistics);
@@ -563,7 +680,7 @@ document.addEventListener('keydown', (event) => {
   if (!$('#game-view').classList.contains('active')) return;
   if (event.code === 'Space') { event.preventDefault(); if (!busy) playCurrentQuestion(); return; }
   if (event.key === 'Enter' && answered) { event.preventDefault(); nextQuestion(); return; }
-  if (['1', '2', '3'].includes(event.key) && !answered && !busy) {
+  if (['1', '2', '3'].includes(event.key) && !answered) {
     event.preventDefault();
     const button = $('#answer-options').querySelectorAll('button')[Number(event.key) - 1];
     if (button && !button.disabled) button.click();
@@ -575,12 +692,9 @@ $('#app-version').textContent = `v${APP_VERSION}`;
 $('#app-version').setAttribute('aria-label', `Version ${APP_VERSION}`);
 state.statistics.lastUsed = new Date().toISOString();
 persist();
-$('#score-value').textContent = '0';
-$('#rate-value').textContent = formatAccuracy(state.statistics);
-$('#streak-value').textContent = String(state.statistics.currentStreak);
-$('#best-streak-value').textContent = String(state.statistics.bestStreak);
 if (loaded.warning) announce(loaded.warning, true);
 if (debugEnabled) {
-  $('#debug-panel').hidden = false;
+  document.body.classList.add('debug-enabled');
+  $('#show-debug').hidden = false;
   updateDebug();
 }
